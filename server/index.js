@@ -119,11 +119,6 @@ app.post('/api/signup', async (req, res) => {
       token: token,  // Add this
       user: { id: newUser._id, email: newUser.email }
     });
-    
-    res.status(201).json({
-      message: 'User created successfully', 
-      user: { id: newUser._id, email: newUser.email }
-    });
   } catch (err) {
     res.status(500).json({ error: 'Error creating user' });
   }
