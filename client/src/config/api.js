@@ -6,7 +6,7 @@
 // Get API URL from environment variables
 // In development, this will use the Vite proxy (relative URLs work)
 // In production, this should point to your actual API domain
-export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+export const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.DEV ? 'http://localhost:3000' : '');
 
 // Helper function to get the correct API endpoint
 export const getApiUrl = (endpoint) => {
