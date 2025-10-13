@@ -129,8 +129,8 @@ A full-stack web application that provides a powerful coding environment with su
 - `GET /api/execute/health` - Check Docker health
 
 ### Authentication
-- `POST /api/auth/register` - User registration
-- `POST /api/auth/login` - User login
+- `POST /api/signup` - User registration
+- `POST /api/login` - User login
 
 ## Code Execution Format
 

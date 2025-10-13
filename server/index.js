@@ -11,12 +11,45 @@ const { authenticateToken } = require('./middleware/auth');
 
 
 // Import modular components
-const { User, Problem , Submission } = require('./models/schemas');
+const { User, Problem, Submission } = require('./models/schemas');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
-const port = 3000;
+
+const PORT = parseInt(process.env.PORT, 10) || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
+
+const rawOrigins = process.env.CLIENT_ORIGINS || process.env.CLIENT_ORIGIN || (isProduction ? '' : 'http://localhost:5173');
+const dockerRequired = process.env.REQUIRE_DOCKER === 'true';
+const allowedOrigins = rawOrigins
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
+
+if (isProduction && allowedOrigins.length === 0) {
+  console.warn('CLIENT_ORIGIN(S) not set. Configure CLIENT_ORIGIN or CLIENT_ORIGINS to restrict CORS in production.');
+}
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    console.warn(`Blocked CORS request from origin: ${origin}`);
+    return callback(new Error('Not allowed by CORS'));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '1mb' }));
+app.enable('trust proxy');
 
 if (!process.env.JWT_SECRET) {
   console.error('JWT_SECRET is not defined in environment variables');
@@ -31,7 +64,10 @@ if (!mongoURI) {
   process.exit(1);
 }
 
-mongoose.connect(mongoURI)
+mongoose.connect(mongoURI, {
+  serverSelectionTimeoutMS: 5000,
+  maxPoolSize: 10
+})
   .then(() => {
     console.log('Connected to MongoDB');
   })
@@ -116,8 +152,8 @@ app.post('/api/signup', async (req, res) => {
 
     res.status(201).json({
       message: 'User created successfully', 
-      token: token,  // Add this
-      user: { id: newUser._id, email: newUser.email }
+      token: token,  
+      user: { id: newUser._id, email: newUser.email } 
     });
   } catch (err) {
     res.status(500).json({ error: 'Error creating user' });
@@ -256,7 +292,16 @@ app.post('/api/submit', authenticateToken, async (req, res) => {
             console.log('Submission failed with runtime error');
           }
         } else {
-          // Fallback to mock result if Docker is not available
+          if (dockerRequired) {
+            console.error('Docker unavailable and REQUIRE_DOCKER=true; rejecting submission');
+            submission.status = 'runtime_error';
+            submission.acceptance = '0%';
+            return res.status(503).json({
+              error: 'Code execution infrastructure unavailable',
+              success: false
+            });
+          }
+
           console.log('Docker unavailable, using mock result');
           const mockResult = {
             status: Math.random() < 0.7 ? 'accepted' : 'wrong_answer',
@@ -340,7 +385,15 @@ app.post('/api/execute', async (req, res) => {
     //Check Docker health
     const dockerHealth = await codeExecutor.checkDockerHealth();
     if (!dockerHealth.healthy){
-      return res.status(503).json({ error: 'Docker is not healthy', success: false });
+      if (dockerRequired) {
+        return res.status(503).json({ error: 'Docker is not healthy', success: false });
+      }
+
+      console.warn('Docker unhealthy but REQUIRE_DOCKER=false; skipping execution');
+      return res.status(503).json({
+        error: 'Code execution temporarily unavailable',
+        success: false
+      });
     }
 
     console.log(`Executing code with ${testCases.length} test cases`);
@@ -416,6 +469,6 @@ app.get(/^(?!\/api\/).*/, (req, res) => {
   res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
 });
 
-app.listen(port, () => {
-  console.log(`Example app listening on port ${port}`)
-})
+app.listen(PORT, () => {
+  console.log(`Praxis API listening on port ${PORT}`);
+});
