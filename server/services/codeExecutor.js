@@ -3,12 +3,24 @@ const docker = new Docker();
 
 class CodeExecutor {
     constructor() {
-        this.imageMap = {
-            'python': 'python-code-runner',
-            'javascript': 'javascript-code-runner',
-            'cpp': 'cpp-code-runner',
-            'csharp': 'csharp-code-runner'
-        };
+        // Use Docker Hub images if DOCKER_HUB_USERNAME is set, otherwise use local images
+        const dockerHubUsername = process.env.DOCKER_HUB_USERNAME;
+        
+        if (dockerHubUsername) {
+            this.imageMap = {
+                'python': `${dockerHubUsername}/praxis-python-runner:latest`,
+                'javascript': `${dockerHubUsername}/praxis-javascript-runner:latest`,
+                'cpp': `${dockerHubUsername}/praxis-cpp-runner:latest`,
+                'csharp': `${dockerHubUsername}/praxis-csharp-runner:latest`
+            };
+        } else {
+            this.imageMap = {
+                'python': 'python-code-runner',
+                'javascript': 'javascript-code-runner',
+                'cpp': 'cpp-code-runner',
+                'csharp': 'csharp-code-runner'
+            };
+        }
         
         this.resourceLimits = {
             'python': {
