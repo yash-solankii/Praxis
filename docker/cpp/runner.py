@@ -37,10 +37,8 @@ def run_code():
         
         results = []
         
-        for i, test_case in enumerate(test_cases):
-            try:
-                # Create C++ template with user code
-                cpp_template = f"""
+        # Create C++ template ONCE
+        cpp_template = f"""
 #include <iostream>
 #include <vector>
 #include <string>
@@ -77,31 +75,39 @@ struct TreeNode {{
 
 {user_code}
 """
-                
-                # Compile and execute (same robust pattern as Python runner)
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False) as f:
-                    f.write(cpp_template)
-                    cpp_file = f.name
-                
+        
+        # Write source file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.cpp', delete=False) as f:
+            f.write(cpp_template)
+            cpp_file = f.name
+        
+        try:
+            exe_file = cpp_file.replace('.cpp', '')
+            
+            # Compile ONCE
+            compile_result = subprocess.run([
+                'g++', '-std=c++17', '-O2', '-Wall', '-Wextra',
+                '-fstack-protector-strong', cpp_file, '-o', exe_file
+            ], capture_output=True, text=True, timeout=10)
+            
+            if compile_result.returncode != 0:
+                # If compilation fails, all tests fail
+                for i, test_case in enumerate(test_cases):
+                    results.append({
+                        'testCase': i + 1,
+                        'input': test_case['input'],
+                        'expected': str(test_case['expected']),
+                        'actual': f"Compilation Error: {compile_result.stderr}",
+                        'passed': False
+                    })
+                print(f"Completed: 0/{len(test_cases)} tests passed")
+                return results
+            
+            print(f"Compilation successful, running {len(test_cases)} test cases")
+            
+            # Run for each test case
+            for i, test_case in enumerate(test_cases):
                 try:
-                    exe_file = cpp_file.replace('.cpp', '')
-                    
-                    # Compile with security flags
-                    compile_result = subprocess.run([
-                        'g++', '-std=c++17', '-O2', '-Wall', '-Wextra',
-                        '-fstack-protector-strong', cpp_file, '-o', exe_file
-                    ], capture_output=True, text=True, timeout=10)
-                    
-                    if compile_result.returncode != 0:
-                        results.append({
-                            'testCase': i + 1,
-                            'input': test_case['input'],
-                            'expected': str(test_case['expected']),
-                            'actual': f"Compilation Error: {compile_result.stderr}",
-                            'passed': False
-                        })
-                        continue
-                    
                     # Execute with timeout
                     exec_result = subprocess.run([
                         exe_file
@@ -116,29 +122,40 @@ struct TreeNode {{
                         'testCase': i + 1,
                         'input': test_case['input'],
                         'expected': expected_output,
-                        'actual': actual_output,
+                        'actual': actual_output if exec_result.returncode == 0 else f"Runtime Error: {exec_result.stderr}",
                         'passed': passed
                     })
                     
                     print(f"{'PASS' if passed else 'FAIL'} Test {i + 1}")
                     
-                finally:
-                    # Cleanup
-                    for file_path in [cpp_file, exe_file]:
-                        try:
-                            if os.path.exists(file_path):
-                                os.unlink(file_path)
-                        except:
-                            pass
-                            
-            except Exception as e:
-                results.append({
-                    'testCase': i + 1,
-                    'input': test_case['input'],
-                    'expected': str(test_case['expected']),
-                    'actual': f"Error: {str(e)}",
-                    'passed': False
-                })
+                except subprocess.TimeoutExpired:
+                    results.append({
+                        'testCase': i + 1,
+                        'input': test_case['input'],
+                        'expected': str(test_case['expected']),
+                        'actual': 'Error: Execution timeout (5 seconds)',
+                        'passed': False
+                    })
+                    print(f"TIMEOUT Test {i + 1}")
+                    
+                except Exception as e:
+                    results.append({
+                        'testCase': i + 1,
+                        'input': test_case['input'],
+                        'expected': str(test_case['expected']),
+                        'actual': f"Error: {str(e)}",
+                        'passed': False
+                    })
+                    print(f"ERROR Test {i + 1}: {e}")
+                    
+        finally:
+            # Cleanup
+            for file_path in [cpp_file, exe_file]:
+                try:
+                    if os.path.exists(file_path):
+                        os.unlink(file_path)
+                except:
+                    pass
         
         # Output results (same format as your other runners)
         passed_tests = len([r for r in results if r['passed']])

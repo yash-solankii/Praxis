@@ -69,11 +69,11 @@ export function Signup({ onLogin }) {
           
           <form onSubmit={handleSubmit} className="auth-form">
             <div className="form-field">
-              <label htmlFor="email">Name</label>
+              <label htmlFor="email">Email</label>
               <input
                 id="email"
                 type="email"
-                placeholder=""
+                placeholder="your.email@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -81,15 +81,15 @@ export function Signup({ onLogin }) {
             </div>
             
             <div className="form-field">
-              <label htmlFor="password">Password</label>
+              <label htmlFor="password">Password (min 8 characters)</label>
               <input
                 id="password"
                 type="password"
-                placeholder=""
+                placeholder="Enter a strong password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={6}
+                minLength={8}
               />
             </div>
             
@@ -178,11 +178,11 @@ export function Login({ onLogin }) {
           
           <form onSubmit={handleSubmit} className="auth-form">
             <div className="form-field">
-              <label htmlFor="login-email">Name</label>
+              <label htmlFor="login-email">Email</label>
               <input
                 id="login-email"
                 type="email"
-                placeholder=""
+                placeholder="your.email@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
@@ -194,7 +194,7 @@ export function Login({ onLogin }) {
               <input
                 id="login-password"
                 type="password"
-                placeholder=""
+                placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required

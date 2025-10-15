@@ -3,6 +3,8 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 const path = require('path');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const codeExecutor = require('./services/codeExecutor');
 dotenv.config();
 const mongoose = require('mongoose');
@@ -17,6 +19,7 @@ const app = express();
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
+const isTest = process.env.NODE_ENV === 'test';
 
 const rawOrigins = process.env.CLIENT_ORIGINS || process.env.CLIENT_ORIGIN || (isProduction ? '' : 'http://localhost:5173');
 const dockerRequired = process.env.REQUIRE_DOCKER === 'true';
@@ -47,9 +50,42 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization']
 };
 
+// Security middleware
+app.use(helmet({
+  contentSecurityPolicy: false, 
+  crossOriginEmbedderPolicy: false // Allow embedding for Monaco editor
+}));
+
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.enable('trust proxy');
+
+// Rate limiters for different endpoints
+// In test mode, use much higher limits to avoid false failures
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: isTest ? 100 : 5, // Relaxed for tests
+  message: 'Too many login attempts, please try again later',
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => isTest && process.env.SKIP_RATE_LIMIT === 'true', // Optional full skip
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: isTest ? 200 : 30, // Relaxed for tests
+  message: 'Too many requests, please slow down',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const executeLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000, // 1 minute
+  max: isTest ? 50 : 10, // Relaxed for tests
+  message: 'Too many code executions, please wait a moment',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 if (!process.env.JWT_SECRET) {
   console.error('JWT_SECRET is not defined in environment variables');
@@ -78,6 +114,48 @@ mongoose.connect(mongoURI, {
 
 app.get('/', (req, res) => {
   res.json({ message: 'Welcome to the Praxis API - Execute, Test, Master!' });
+});
+
+// Health check endpoint for AWS load balancers
+app.get('/health', async (req, res) => {
+  try {
+    // Check MongoDB connection
+    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+    
+    // Check Docker health (optional - don't fail if Docker is down)
+    let dockerStatus = 'unknown';
+    try {
+      const dockerHealth = await codeExecutor.checkDockerHealth();
+      dockerStatus = dockerHealth.healthy ? 'healthy' : 'unhealthy';
+    } catch (error) {
+      dockerStatus = 'unavailable';
+    }
+
+    // Overall health check
+    const isHealthy = dbStatus === 'connected';
+    
+    if (isHealthy) {
+      res.status(200).json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        database: dbStatus,
+        docker: dockerStatus,
+        uptime: process.uptime()
+      });
+    } else {
+      res.status(503).json({
+        status: 'unhealthy',
+        timestamp: new Date().toISOString(),
+        database: dbStatus,
+        docker: dockerStatus
+      });
+    }
+  } catch (error) {
+    res.status(503).json({
+      status: 'error',
+      error: 'Health check failed'
+    });
+  }
 });
 
 // Get all problems from MongoDB
@@ -120,15 +198,15 @@ app.get('/problems/:id', async (req, res) => {
   }
 });
 
-app.post('/api/signup', async (req, res) => {
+app.post('/api/signup', authLimiter, async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
   }
   
-  if (password.length < 6) {
-    return res.status(400).json({ error: 'Password must be at least 6 characters' });
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
   }
   
   try {
@@ -160,7 +238,7 @@ app.post('/api/signup', async (req, res) => {
   }
 });
 
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', authLimiter, async (req, res) => {
   const { email, password } = req.body;
   
   // Basic validation FIRST
@@ -234,7 +312,7 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-app.post('/api/submit', authenticateToken, async (req, res) => {
+app.post('/api/submit', executeLimiter, authenticateToken, async (req, res) => {
   const { problemId, code, language, testCases } = req.body;
   const userId = req.user.userId;
   
@@ -366,7 +444,7 @@ app.get('/api/submissions', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/execute', async (req, res) => {
+app.post('/api/execute', executeLimiter, async (req, res) => {
   try{ 
     const { code, testCases, language = 'python' } = req.body;
     console.log(`Code execution request received: ${language}`);
@@ -469,6 +547,44 @@ app.get(/^(?!\/api\/).*/, (req, res) => {
   res.sendFile(path.join(__dirname, '../client/dist', 'index.html'));
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Praxis API listening on port ${PORT}`);
+  console.log(`Environment: ${isProduction ? 'production' : 'development'}`);
+  console.log(`Health check available at: http://localhost:${PORT}/health`);
+});
+
+// Graceful shutdown handling for AWS deployments
+const gracefulShutdown = (signal) => {
+  console.log(`\n${signal} received. Starting graceful shutdown...`);
+  
+  server.close(() => {
+    console.log('HTTP server closed');
+    
+    // Close MongoDB connection
+    mongoose.connection.close(false, () => {
+      console.log('MongoDB connection closed');
+      process.exit(0);
+    });
+  });
+
+  // Force shutdown after 10 seconds if graceful shutdown fails
+  setTimeout(() => {
+    console.error('Forced shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+};
+
+// Listen for termination signals (important for AWS deployments)
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught errors
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // In production, you might want to log this to a service like CloudWatch
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
 });

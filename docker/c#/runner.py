@@ -35,9 +35,8 @@ def run_code():
         
         results = []
         
-        for i, test_case in enumerate(test_cases):
-            try:
-                csharp_template = f"""
+        # Create C# template ONCE
+        csharp_template = f"""
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -46,61 +45,65 @@ public class Program
 {{
     public static void Main()
     {{
-        List<string> inputLines = new List<string>();
-        string line;
-        while ((line = Console.ReadLine()) != null)
-        {{
-            inputLines.Add(line);
-        }}
-        
         {user_code}
     }}
 }}
 """
-                
-                with tempfile.NamedTemporaryFile(mode='w', suffix='.cs', delete=False) as f:
-                    f.write(csharp_template)
-                    cs_file = f.name
-                
+        
+        # Create a unique temporary directory for this submission
+        temp_dir = tempfile.mkdtemp(prefix='csharp_')
+        project_name = f"Project_{int(time.time() * 1000)}"
+        project_dir = os.path.join(temp_dir, project_name)
+        
+        try:
+            # Create project ONCE
+            create_result = subprocess.run([
+                'dotnet', 'new', 'console', '-n', project_name, '--force'
+            ], cwd=temp_dir, capture_output=True, text=True, timeout=10)
+            
+            if create_result.returncode != 0:
+                # If project creation fails, all tests fail
+                for i, test_case in enumerate(test_cases):
+                    results.append({
+                        'testCase': i + 1,
+                        'input': test_case['input'],
+                        'expected': str(test_case['expected']),
+                        'actual': f"Project creation error: {create_result.stderr}",
+                        'passed': False
+                    })
+                print(f"Completed: 0/{len(test_cases)} tests passed")
+                return results
+            
+            # Write user code to Program.cs
+            program_file = os.path.join(project_dir, 'Program.cs')
+            with open(program_file, 'w') as f:
+                f.write(csharp_template)
+            
+            # Build ONCE
+            build_result = subprocess.run([
+                'dotnet', 'build', '-c', 'Release', '--nologo', '--verbosity', 'quiet'
+            ], cwd=project_dir, capture_output=True, text=True, timeout=15)
+            
+            if build_result.returncode != 0:
+                # If compilation fails, all tests fail
+                for i, test_case in enumerate(test_cases):
+                    results.append({
+                        'testCase': i + 1,
+                        'input': test_case['input'],
+                        'expected': str(test_case['expected']),
+                        'actual': f"Compilation Error: {build_result.stderr}",
+                        'passed': False
+                    })
+                print(f"Completed: 0/{len(test_cases)} tests passed")
+                return results
+            
+            print(f"Build successful, running {len(test_cases)} test cases")
+            
+            # Run for each test case
+            for i, test_case in enumerate(test_cases):
                 try:
-                    exe_file = cs_file.replace('.cs', '')
-                    
-                    compile_result = subprocess.run([
-                        'dotnet', 'new', 'console', '-n', 'TempProject', '--force'
-                    ], cwd=os.path.dirname(cs_file), capture_output=True, text=True, timeout=10)
-                    
-                    if compile_result.returncode != 0:
-                        results.append({
-                            'testCase': i + 1,
-                            'input': test_case['input'],
-                            'expected': str(test_case['expected']),
-                            'actual': f"Project creation error: {compile_result.stderr}",
-                            'passed': False
-                        })
-                        continue
-                    
-                    project_dir = os.path.join(os.path.dirname(cs_file), 'TempProject')
-                    program_file = os.path.join(project_dir, 'Program.cs')
-                    
-                    with open(program_file, 'w') as f:
-                        f.write(csharp_template)
-                    
-                    build_result = subprocess.run([
-                        'dotnet', 'build', '-c', 'Release'
-                    ], cwd=project_dir, capture_output=True, text=True, timeout=10)
-                    
-                    if build_result.returncode != 0:
-                        results.append({
-                            'testCase': i + 1,
-                            'input': test_case['input'],
-                            'expected': str(test_case['expected']),
-                            'actual': f"Compilation Error: {build_result.stderr}",
-                            'passed': False
-                        })
-                        continue
-                    
                     exec_result = subprocess.run([
-                        'dotnet', 'run', '-c', 'Release', '--no-build'
+                        'dotnet', 'run', '-c', 'Release', '--no-build', '--nologo'
                     ], cwd=project_dir, input=str(test_case['input']), 
                        capture_output=True, text=True, timeout=5)
                     
@@ -112,35 +115,40 @@ public class Program
                         'testCase': i + 1,
                         'input': test_case['input'],
                         'expected': expected_output,
-                        'actual': actual_output,
+                        'actual': actual_output if exec_result.returncode == 0 else f"Runtime Error: {exec_result.stderr}",
                         'passed': passed
                     })
                     
                     print(f"{'PASS' if passed else 'FAIL'} Test {i + 1}")
                     
-                finally:
-                    for cleanup_path in [cs_file, exe_file]:
-                        try:
-                            if os.path.exists(cleanup_path):
-                                os.unlink(cleanup_path)
-                        except:
-                            pass
+                except subprocess.TimeoutExpired:
+                    results.append({
+                        'testCase': i + 1,
+                        'input': test_case['input'],
+                        'expected': str(test_case['expected']),
+                        'actual': 'Error: Execution timeout (5 seconds)',
+                        'passed': False
+                    })
+                    print(f"TIMEOUT Test {i + 1}")
                     
-                    try:
-                        import shutil
-                        if os.path.exists(project_dir):
-                            shutil.rmtree(project_dir)
-                    except:
-                        pass
-                            
+                except Exception as e:
+                    results.append({
+                        'testCase': i + 1,
+                        'input': test_case['input'],
+                        'expected': str(test_case['expected']),
+                        'actual': f"Error: {str(e)}",
+                        'passed': False
+                    })
+                    print(f"ERROR Test {i + 1}: {e}")
+                    
+        finally:
+            # Cleanup temporary directory
+            try:
+                import shutil
+                if os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
             except Exception as e:
-                results.append({
-                    'testCase': i + 1,
-                    'input': test_case['input'],
-                    'expected': str(test_case['expected']),
-                    'actual': f"Error: {str(e)}",
-                    'passed': False
-                })
+                print(f"Cleanup warning: {e}")
         
         passed_tests = len([r for r in results if r['passed']])
         print(f"Completed: {passed_tests}/{len(results)} tests passed")

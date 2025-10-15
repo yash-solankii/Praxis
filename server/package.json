@@ -4,11 +4,16 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "dev": "nodemon index.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
     "seed": "node seed.js",
     "seed:add": "node seed.js add",
     "seed:update": "node seed.js update",
     "seed:clear": "node seed.js clear",
-    "seed:reset": "node seed.js reset"
+    "seed:reset": "node seed.js reset",
+    "health": "curl http://localhost:3000/health"
   },
   "author": "",
   "license": "ISC",
@@ -19,7 +24,13 @@
     "dockerode": "^4.0.8",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.18.1"
+  },
+  "devDependencies": {
+    "jest": "^30.2.0",
+    "supertest": "^7.1.4"
   }
 }
