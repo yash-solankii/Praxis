@@ -5,8 +5,9 @@ const dotenv = require('dotenv');
 const path = require('path');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const codeExecutor = require('./services/codeExecutor');
 dotenv.config();
+const codeExecutor = require('./services/codeExecutor');
+
 const mongoose = require('mongoose');
 const cors = require('cors');
 const { authenticateToken } = require('./middleware/auth');
